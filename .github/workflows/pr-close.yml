@@ -1,0 +1,46 @@
+name: PR Preview — Tear Down
+
+on:
+  pull_request:
+    types: [closed]
+
+env:
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+  COMPOSE_PROJECT: pr-${{ github.event.pull_request.number }}
+  DB_NAME: pr_${{ github.event.pull_request.number }}
+
+jobs:
+  destroy-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tear down PR preview on VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            PR_NUMBER="${{ env.PR_NUMBER }}"
+            COMPOSE_PROJECT="pr-${PR_NUMBER}"
+            DB_NAME="pr_${PR_NUMBER}"
+            REPO_DIR="/opt/pr-preview"
+            IMAGE_TAG="pr-${PR_NUMBER}-${{ github.sha }}"
+
+            echo "=== Tearing down PR #${PR_NUMBER} ==="
+
+            # --- Drop the logical database ---
+            echo "Dropping database ${DB_NAME}..."
+            docker exec postgres psql -U postgres -c \
+              "DROP DATABASE IF EXISTS \"${DB_NAME}\";"
+
+            # --- Stop and remove containers + anonymous volumes ---
+            cd "${REPO_DIR}"
+            docker compose -f docker-compose.pr.yml -p "${COMPOSE_PROJECT}" down -v
+
+            # --- Clean up images ---
+            docker rmi "rails-app:${IMAGE_TAG}" 2>/dev/null || true
+            docker rmi "vite-app:${IMAGE_TAG}" 2>/dev/null || true
+
+            echo "=== PR #${PR_NUMBER} environment destroyed ==="
