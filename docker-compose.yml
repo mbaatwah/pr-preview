@@ -1,0 +1,60 @@
+# Base infrastructure: Caddy (reverse proxy) + PostgreSQL (shared database)
+#
+# This compose file runs permanently on the VPS.
+# PR environments are launched separately via docker-compose.pr.yml.
+#
+# Prerequisites:
+#   1. docker network create caddy --ipv6
+#   2. .env file with CLOUDFLARE_API_TOKEN and POSTGRES_PASSWORD
+#   3. DNS: *.pr.mydomain.com → A record pointing to this VPS IP
+
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    container_name: caddy
+    ports:
+      - "80:80"
+      - "443:443/tcp"
+      - "443:443/udp"
+    environment:
+      - CADDY_INGRESS_NETWORKS=caddy
+      - CADDY_DOCKER_POLLING_INTERVAL=5s
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+    networks:
+      - caddy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    labels:
+      # Global ACME DNS challenge via Cloudflare — all sites share this
+      caddy.acme_dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    networks:
+      - caddy
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # No ports exposed to host — only accessible via the caddy network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+networks:
+  caddy:
+    external: true
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  postgres_data: {}
