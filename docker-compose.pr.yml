@@ -1,0 +1,44 @@
+# PR ephemeral environment template
+#
+# This compose file is instantiated per-PR by the CI/CD pipeline.
+# It is NOT run directly — the workflow substitutes PR_NUMBER and IMAGE_TAG.
+#
+# Usage (automated by GitHub Actions):
+#   PR_NUMBER=42 IMAGE_TAG=abc123 DATABASE_URL=postgres://... \
+#     docker compose -f docker-compose.pr.yml -p pr-42 up -d
+
+services:
+  rails:
+    image: ${RAILS_IMAGE}:${IMAGE_TAG}
+    container_name: rails-pr-${PR_NUMBER}
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - RAILS_ENV=production
+      - RAILS_LOG_TO_STDOUT=true
+    networks:
+      - caddy
+    labels:
+      # Caddy routing: api-pr-42.pr.mydomain.com → this container
+      caddy: "api-pr-${PR_NUMBER}.pr.mydomain.com"
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  vite:
+    image: ${VITE_IMAGE}:${IMAGE_TAG}
+    container_name: vite-pr-${PR_NUMBER}
+    environment:
+      - VITE_API_URL=https://api-pr-${PR_NUMBER}.pr.mydomain.com
+    networks:
+      - caddy
+    labels:
+      # Caddy routing: pr-42.pr.mydomain.com → this container
+      caddy: "pr-${PR_NUMBER}.pr.mydomain.com"
+      caddy.reverse_proxy: "{{upstreams 80}}"
+    restart: unless-stopped
+
+networks:
+  caddy:
+    external: true
