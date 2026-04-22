@@ -8,78 +8,61 @@ env:
   PR_NUMBER: ${{ github.event.pull_request.number }}
   IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
   COMPOSE_PROJECT: pr-${{ github.event.pull_request.number }}
-  DB_NAME: pr_${{ github.event.pull_request.number }}
 
 jobs:
   deploy-preview:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
-      - name: Checkout
+      - name: Checkout PR code
         uses: actions/checkout@v4
-
-      - name: Build and deploy PR preview on VPS
-        uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            set -euo pipefail
+          # Explicitly check out the PR head so the compose file and
+          # Dockerfiles come from the PR branch, not the base branch.
+          ref: ${{ github.event.pull_request.head.sha }}
 
-            PR_NUMBER="${{ env.PR_NUMBER }}"
-            IMAGE_TAG="${{ env.IMAGE_TAG }}"
-            COMPOSE_PROJECT="pr-${PR_NUMBER}"
-            DB_NAME="pr_${PR_NUMBER}"
-            REPO_DIR="/opt/pr-preview"
-            BRANCH="${{ github.event.pull_request.head.ref }}"
+      - name: Build Docker images
+        run: |
+          set -euo pipefail
 
-            echo "=== Spinning up PR #${PR_NUMBER} (branch: ${BRANCH}) ==="
+          echo "Building Rails image (tag: ${{ env.IMAGE_TAG }})..."
+          docker build -t rails-app:${{ env.IMAGE_TAG }} -f Dockerfile.rails .
 
-            # --- Clone or update the app repo ---
-            APP_DIR="/opt/apps/${{ github.event.repository.name }}"
-            if [ -d "${APP_DIR}" ]; then
-              cd "${APP_DIR}"
-              git fetch origin "${BRANCH}"
-              git checkout "${BRANCH}"
-              git reset --hard "origin/${BRANCH}"
-            else
-              git clone --branch "${BRANCH}" \
-                "${{ github.event.repository.clone_url }}" \
-                "${APP_DIR}"
-              cd "${APP_DIR}"
-            fi
+          echo "Building Vite image (tag: ${{ env.IMAGE_TAG }})..."
+          docker build -t vite-app:${{ env.IMAGE_TAG }} -f Dockerfile.vite .
 
-            # --- Build images ---
-            echo "Building Rails image..."
-            docker build -t rails-app:${IMAGE_TAG} -f Dockerfile.rails .
+      - name: Select compose file
+        id: compose
+        run: |
+          if [ -f "${GITHUB_WORKSPACE}/docker-compose.pr.yml" ]; then
+            echo "file=${GITHUB_WORKSPACE}/docker-compose.pr.yml" >> "$GITHUB_OUTPUT"
+            echo "Using app repo compose file."
+          else
+            echo "file=/opt/pr-preview/docker-compose.pr.yml" >> "$GITHUB_OUTPUT"
+            echo "Using infra repo fallback compose file."
+          fi
 
-            echo "Building Vite image..."
-            docker build -t vite-app:${IMAGE_TAG} -f Dockerfile.vite .
+      - name: Tear down previous PR containers
+        run: |
+          docker compose \
+            -f "${{ steps.compose.outputs.file }}" \
+            -p "${{ env.COMPOSE_PROJECT }}" \
+            down -v 2>/dev/null || true
 
-            # --- Create the logical database on shared Postgres ---
-            echo "Creating database ${DB_NAME}..."
-            docker exec postgres psql -U postgres -c \
-              "CREATE DATABASE \"${DB_NAME}\";" 2>/dev/null || true
+      - name: Spin up PR containers
+        run: |
+          PR_NUMBER="${{ env.PR_NUMBER }}" \
+          IMAGE_TAG="${{ env.IMAGE_TAG }}" \
+          RAILS_IMAGE=rails-app \
+          VITE_IMAGE=vite-app \
+          docker compose \
+            -f "${{ steps.compose.outputs.file }}" \
+            -p "${{ env.COMPOSE_PROJECT }}" \
+            up -d
 
-            # --- Construct DATABASE_URL ---
-            # Uses the Docker network hostname "postgres" and the shared password
-            DATABASE_URL="postgres://postgres:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/${DB_NAME}"
+      - name: Prepare database
+        run: |
+          docker exec "rails-pr-${{ env.PR_NUMBER }}" bin/rails db:prepare
 
-            # --- Tear down any previous containers for this PR (sync event) ---
-            cd "${REPO_DIR}"
-            docker compose -f docker-compose.pr.yml -p "${COMPOSE_PROJECT}" down -v 2>/dev/null || true
-
-            # --- Spin up PR containers ---
-            echo "Starting containers..."
-            PR_NUMBER="${PR_NUMBER}" \
-            IMAGE_TAG="${IMAGE_TAG}" \
-            DATABASE_URL="${DATABASE_URL}" \
-            RAILS_IMAGE=rails-app \
-            VITE_IMAGE=vite-app \
-            docker compose -f docker-compose.pr.yml -p "${COMPOSE_PROJECT}" up -d
-
-            # --- Run Rails db:prepare (create schema, run migrations) ---
-            echo "Preparing database..."
-            docker exec "rails-pr-${PR_NUMBER}" bin/rails db:prepare
-
-            echo "=== PR #${PR_NUMBER} live at https://pr-${PR_NUMBER}.pr.mydomain.com ==="
+      - name: Report preview URL
+        run: |
+          echo "=== PR #${{ env.PR_NUMBER }} live at https://pr-${{ env.PR_NUMBER }}.pr.mydomain.com ==="

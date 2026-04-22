@@ -7,40 +7,40 @@ on:
 env:
   PR_NUMBER: ${{ github.event.pull_request.number }}
   COMPOSE_PROJECT: pr-${{ github.event.pull_request.number }}
-  DB_NAME: pr_${{ github.event.pull_request.number }}
 
 jobs:
   destroy-preview:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
-      - name: Tear down PR preview on VPS
-        uses: appleboy/ssh-action@v1
+      - name: Checkout PR code
+        uses: actions/checkout@v4
         with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            set -euo pipefail
+          ref: ${{ github.event.pull_request.head.sha }}
 
-            PR_NUMBER="${{ env.PR_NUMBER }}"
-            COMPOSE_PROJECT="pr-${PR_NUMBER}"
-            DB_NAME="pr_${PR_NUMBER}"
-            REPO_DIR="/opt/pr-preview"
-            IMAGE_TAG="pr-${PR_NUMBER}-${{ github.sha }}"
+      - name: Select compose file
+        id: compose
+        run: |
+          if [ -f "${GITHUB_WORKSPACE}/docker-compose.pr.yml" ]; then
+            echo "file=${GITHUB_WORKSPACE}/docker-compose.pr.yml" >> "$GITHUB_OUTPUT"
+          else
+            echo "file=/opt/pr-preview/docker-compose.pr.yml" >> "$GITHUB_OUTPUT"
+          fi
 
-            echo "=== Tearing down PR #${PR_NUMBER} ==="
+      - name: Tear down PR environment
+        run: |
+          docker compose \
+            -f "${{ steps.compose.outputs.file }}" \
+            -p "${{ env.COMPOSE_PROJECT }}" \
+            down -v
 
-            # --- Drop the logical database ---
-            echo "Dropping database ${DB_NAME}..."
-            docker exec postgres psql -U postgres -c \
-              "DROP DATABASE IF EXISTS \"${DB_NAME}\";"
+      - name: Clean up images
+        run: |
+          # Tags are formatted as pr-<number>-<40-char-sha>; anchor the regex
+          # to avoid false positives (e.g. PR 1 matching inside PR 10).
+          docker images --format '{{.Repository}}:{{.Tag}}' | \
+            grep -E ":pr-${{ env.PR_NUMBER }}-[a-f0-9]{40}$" | \
+            xargs -r docker rmi 2>/dev/null || true
 
-            # --- Stop and remove containers + anonymous volumes ---
-            cd "${REPO_DIR}"
-            docker compose -f docker-compose.pr.yml -p "${COMPOSE_PROJECT}" down -v
-
-            # --- Clean up images ---
-            docker rmi "rails-app:${IMAGE_TAG}" 2>/dev/null || true
-            docker rmi "vite-app:${IMAGE_TAG}" 2>/dev/null || true
-
-            echo "=== PR #${PR_NUMBER} environment destroyed ==="
+      - name: Report teardown
+        run: |
+          echo "=== PR #${{ env.PR_NUMBER }} environment destroyed ==="
