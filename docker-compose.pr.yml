@@ -1,18 +1,22 @@
-# PR ephemeral environment template
+# PR ephemeral environment REFERENCE template
 #
-# This compose file is instantiated per-PR by the CI/CD pipeline.
-# It is NOT run directly — the workflow substitutes PR_NUMBER and IMAGE_TAG.
+# The application repository should provide its own docker-compose.pr.yml
+# that defines its full stack (including any database service it requires).
 #
-# Usage (automated by GitHub Actions):
-#   PR_NUMBER=42 IMAGE_TAG=abc123 DATABASE_URL=postgres://... \
-#     docker compose -f docker-compose.pr.yml -p pr-42 up -d
+# This file is kept as a reference. The CI/CD workflow prefers the app repo's
+# compose file and falls back to this template only if none is provided.
+#
+# Environment variables injected by the workflow:
+#   PR_NUMBER   — PR number (used for container names and hostnames)
+#   IMAGE_TAG   — image tag built by the workflow
+#   RAILS_IMAGE — default: rails-app
+#   VITE_IMAGE  — default: vite-app
 
 services:
   rails:
-    image: ${RAILS_IMAGE}:${IMAGE_TAG}
+    image: ${RAILS_IMAGE:-rails-app}:${IMAGE_TAG}
     container_name: rails-pr-${PR_NUMBER}
     environment:
-      - DATABASE_URL=${DATABASE_URL}
       - RAILS_ENV=production
       - RAILS_LOG_TO_STDOUT=true
     networks:
@@ -21,13 +25,10 @@ services:
       # Caddy routing: api-pr-42.pr.mydomain.com → this container
       caddy: "api-pr-${PR_NUMBER}.pr.mydomain.com"
       caddy.reverse_proxy: "{{upstreams 3000}}"
-    depends_on:
-      postgres:
-        condition: service_healthy
     restart: unless-stopped
 
   vite:
-    image: ${VITE_IMAGE}:${IMAGE_TAG}
+    image: ${VITE_IMAGE:-vite-app}:${IMAGE_TAG}
     container_name: vite-pr-${PR_NUMBER}
     environment:
       - VITE_API_URL=https://api-pr-${PR_NUMBER}.pr.mydomain.com
