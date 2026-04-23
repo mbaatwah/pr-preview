@@ -12,6 +12,10 @@ jobs:
   destroy-preview:
     runs-on: self-hosted
     steps:
+      # ⚠️ NOTE: This checkout can fail if the branch was deleted immediately
+      # after merge (common with "delete branch on merge" enabled). If the
+      # compose file changed between the last deployment and now, down may
+      # not match the running containers. Consider stateless teardown instead.
       - name: Checkout PR code
         uses: actions/checkout@v4
         with:

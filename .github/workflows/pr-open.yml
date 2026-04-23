@@ -4,6 +4,14 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+# ⚠️ NOTE: This workflow does not declare a concurrency group. Multiple rapid
+# pushes to the same PR can cause overlapping runs that interfere with each
+# other because they share the same COMPOSE_PROJECT name. Consider adding:
+#
+# concurrency:
+#   group: pr-preview-${{ github.event.pull_request.number }}
+#   cancel-in-progress: true
+
 env:
   PR_NUMBER: ${{ github.event.pull_request.number }}
   IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
@@ -41,6 +49,9 @@ jobs:
             echo "Using infra repo fallback compose file."
           fi
 
+      # ⚠️ NOTE: The old environment is destroyed before the new one is built.
+      # If the build or db:prepare fails, the PR will have no working preview.
+      # For critical apps, consider a blue-green deployment approach.
       - name: Tear down previous PR containers
         run: |
           docker compose \
@@ -59,6 +70,9 @@ jobs:
             -p "${{ env.COMPOSE_PROJECT }}" \
             up -d
 
+      # NOTE: This step hardcodes the container name `rails-pr-<number>`.
+      # The Rails service in docker-compose.pr.yml MUST be named `rails` and
+      # MUST use the container_name pattern `rails-pr-${PR_NUMBER}`.
       - name: Prepare database
         run: |
           docker exec "rails-pr-${{ env.PR_NUMBER }}" bin/rails db:prepare

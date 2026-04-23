@@ -21,10 +21,10 @@
 │                     Ubuntu VPS                              │
 │                                                             │
 │  ┌─────────────────┐    ┌───────────────────────────────┐  │
-│  │  Caddy (proxy)  │    │  GitHub Actions Runner Agent  │  │
-│  │  + wildcard TLS │    │  (connects outbound to GH)    │  │
+│  │ Traefik (proxy) │    │  GitHub Actions Runner Agent  │
+│  │ + wildcard TLS  │    │  (connects outbound to GH)    │
 │  └────────┬────────┘    └───────────────┬───────────────┘  │
-│           │ caddy network               │ checkout + build │
+│           │ traefik network             │ checkout + build │
 │  ┌────────┴─────────────────────────────┴───────────────┐  │
 │  │  PR 42: rails-pr-42 + vite-pr-42 + postgres-pr-42   │  │
 │  │  PR 87: rails-pr-87 + vite-pr-87 + postgres-pr-87   │  │
@@ -33,7 +33,7 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- **Caddy**: Single wildcard cert (`*.pr.mydomain.com`) via Cloudflare DNS challenge
+- **Traefik**: Single wildcard cert (`*.pr.<your-domain>.com`) via Cloudflare DNS challenge
 - **Self-hosted runner**: A GitHub Actions agent running on the VPS itself. Jobs
   are dispatched from GitHub, but Docker commands run natively on the machine.
 - **PR stacks**: Each PR is self-contained. The application repository defines its own
@@ -55,8 +55,8 @@ sudo usermod -aG docker $USER
 docker --version
 docker compose version
 
-# Create the ingress network (required by caddy-docker-proxy)
-docker network create caddy --ipv6
+# Create the ingress network (required by Traefik Docker provider)
+docker network create traefik --ipv6
 
 # Create the project directory
 sudo mkdir -p /opt/pr-preview
@@ -68,15 +68,30 @@ git clone <your-infra-repo-url> .
 
 # Create the .env file from the template
 cp .env.example .env
-nano .env   # Fill in CLOUDFLARE_API_TOKEN
+nano .env   # Fill in CLOUDFLARE_API_TOKEN and TRAEFIK_ACME_EMAIL
 
 # Start the base infrastructure
 docker compose up -d
 
 # Verify
-docker compose ps          # Should show caddy running
-docker logs caddy          # Should show "caddy-docker-proxy" started
+docker compose ps          # Should show traefik running
+docker logs traefik        # Should show "Starting provider *docker.Provider"
 ```
+
+### Optional: Enable the Traefik Dashboard
+
+If you want the Traefik dashboard exposed with basic auth:
+
+```bash
+# Generate a basic auth hash (replace 'yourpassword')
+htpasswd -nb admin yourpassword | sed -e s/\\$/\\$\\$/g
+
+# Paste the result into .env as TRAEFIK_DASHBOARD_AUTH
+# Then start with the dashboard overlay:
+docker compose -f docker-compose.yml -f docker-compose.dashboard.yml up -d
+```
+
+The dashboard will be available at `https://traefik.pr.<your-domain>.com` (or whatever you set in `TRAEFIK_DASHBOARD_DOMAIN`).
 
 ---
 
@@ -148,9 +163,24 @@ Settings → Actions → Runners page.
 
 Your app repository needs these files at its root:
 
+### Domain & Environment Variables
+
+Before copying the examples below, replace all occurrences of `<your-domain>.com` with your actual domain. The following environment variables should be configured in your repository settings (GitHub Secrets or Variables) or in a `.env` file:
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `POSTGRES_PASSWORD` | Database password for the per-PR Postgres container | (generate a strong password) |
+
+> **Note:** The `POSTGRES_PASSWORD` example uses `${POSTGRES_PASSWORD}` in the compose file. Set this via GitHub Secrets (`secrets.POSTGRES_PASSWORD`) and pass it into the workflow environment, or export it on the runner before the workflow runs.
+
 ### `docker-compose.pr.yml`
 
 This file defines the full per-PR stack. The workflow injects `PR_NUMBER` and `IMAGE_TAG`.
+
+> **⚠️ Important constraints:**
+> - The Rails service **must be named `rails`** (the workflow hardcodes `docker exec rails-pr-${PR_NUMBER}`).
+> - If you change `container_name` for the Rails service, the database preparation step will fail.
+> - The fallback `docker-compose.pr.yml` in this repo **does not include a database service**. If your app needs Postgres, you must provide your own compose file (recommended).
 
 ```yaml
 services:
@@ -158,7 +188,7 @@ services:
     image: postgres:16-alpine
     container_name: postgres-pr-${PR_NUMBER}
     environment:
-      POSTGRES_PASSWORD: changeme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -167,37 +197,43 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - caddy
+      - traefik
 
   rails:
     image: rails-app:${IMAGE_TAG}
     container_name: rails-pr-${PR_NUMBER}
     environment:
-      DATABASE_URL: postgres://postgres:changeme@postgres-pr-${PR_NUMBER}:5432/app
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres-pr-${PR_NUMBER}:5432/app
       RAILS_ENV: production
       RAILS_LOG_TO_STDOUT: "true"
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      - caddy
+      - traefik
     labels:
-      caddy: "api-pr-${PR_NUMBER}.pr.mydomain.com"
-      caddy.reverse_proxy: "{{upstreams 3000}}"
+      - "traefik.enable=true"
+      - "traefik.http.routers.rails-pr-${PR_NUMBER}.rule=Host(`api-pr-${PR_NUMBER}.pr.<your-domain>.com`)"
+      - "traefik.http.routers.rails-pr-${PR_NUMBER}.entrypoints=websecure"
+      - "traefik.http.routers.rails-pr-${PR_NUMBER}.tls.certresolver=letsencrypt"
+      - "traefik.http.services.rails-pr-${PR_NUMBER}.loadbalancer.server.port=3000"
 
   vite:
     image: vite-app:${IMAGE_TAG}
     container_name: vite-pr-${PR_NUMBER}
     environment:
-      VITE_API_URL: https://api-pr-${PR_NUMBER}.pr.mydomain.com
+      VITE_API_URL: https://api-pr-${PR_NUMBER}.pr.<your-domain>.com
     networks:
-      - caddy
+      - traefik
     labels:
-      caddy: "pr-${PR_NUMBER}.pr.mydomain.com"
-      caddy.reverse_proxy: "{{upstreams 80}}"
+      - "traefik.enable=true"
+      - "traefik.http.routers.vite-pr-${PR_NUMBER}.rule=Host(`pr-${PR_NUMBER}.pr.<your-domain>.com`)"
+      - "traefik.http.routers.vite-pr-${PR_NUMBER}.entrypoints=websecure"
+      - "traefik.http.routers.vite-pr-${PR_NUMBER}.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vite-pr-${PR_NUMBER}.loadbalancer.server.port=80"
 
 networks:
-  caddy:
+  traefik:
     external: true
 
 volumes:
@@ -270,7 +306,7 @@ server {
    - `pr-42.pr.mydomain.com` → Vite container (frontend)
    - `api-pr-42.pr.mydomain.com` → Rails container (API)
 6. Runs `bin/rails db:prepare` inside the Rails container
-7. Caddy auto-discovers the new containers via Docker labels (5s polling)
+7. Traefik discovers the new containers via Docker labels and updates its routing table
 
 ### PR Closed
 
@@ -281,7 +317,54 @@ server {
 
 ---
 
-## 6. Maintenance
+## 6. Security Considerations
+
+### Network Isolation
+
+All PR stacks attach to the same external `traefik` network. Containers from different PRs can reach each other by container name (e.g., `postgres-pr-87` is reachable from `rails-pr-42`). If you run PRs from untrusted contributors or with sensitive data, consider additional isolation:
+
+- Use per-PR Docker networks bridged to Traefik.
+- Randomize container names or use non-predictable hostnames.
+- Avoid placing sensitive services on the shared `traefik` network.
+
+### Self-Hosted Runner Security
+
+As noted at the top of this guide, self-hosted runners should **only be used with private repositories**. Public forks can open PRs and execute arbitrary code on your VPS. If your repository is public, use a webhook-based deployment model with GitHub-hosted runners instead.
+
+### Database Passwords
+
+Never commit database passwords to your repository. Use GitHub Secrets or environment variables injected at runtime. The examples in this guide use `${POSTGRES_PASSWORD}` as a placeholder.
+
+---
+
+## 7. Known Limitations
+
+### No Concurrency Control (Race Condition)
+
+The example workflows do not declare a `concurrency` group. If a PR receives multiple pushes in quick succession, multiple workflow runs can execute concurrently on the self-hosted runner. Because every run for the same PR uses the identical `COMPOSE_PROJECT` name, they can interfere with each other (e.g., one run tearing down containers that another just started).
+
+**Fix:** Add a concurrency block to `pr-open.yml`:
+```yaml
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+```
+
+### Fragile Teardown on Branch Deletion
+
+`pr-close.yml` checks out the PR branch using `head.sha`. If the branch is deleted immediately after merge (common with "delete branch on merge" enabled), the checkout can fail. Additionally, if `docker-compose.pr.yml` changed between the last deployment and the close event, `docker compose down` may not match the running containers.
+
+**Mitigation:** Ensure "delete branch on merge" is disabled, or implement a stateless teardown that targets containers by project label without checking out code.
+
+### No Rollback on Failed Updates
+
+`pr-open.yml` tears down the previous environment *before* building images and starting the new stack. If the new build fails or a migration errors, the PR is left with no working preview environment.
+
+**Mitigation:** Test builds locally before pushing, or implement a blue-green deployment approach (build and verify the new stack before swapping).
+
+---
+
+## 8. Maintenance
 
 ### Update the runner
 
@@ -306,7 +389,7 @@ tar xzf "actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
 
 ### Monitor disk usage
 
-Docker images and runner workspaces accumulate over time:
+Docker images, build cache, and runner workspaces accumulate over time:
 
 ```bash
 # Check Docker disk usage
@@ -315,13 +398,18 @@ docker system df -v
 # Prune dangling images (safe)
 docker image prune -f
 
+# Prune build cache and unused builder layers (run periodically)
+docker builder prune -f
+
 # Check runner workspace size
 du -sh ~/actions-runner/_work
 ```
 
+> **Note:** The `pr-close.yml` cleanup step removes tagged images, but it does not remove untagged intermediate layers produced by multi-stage builds. Running `docker builder prune -f` periodically prevents gradual disk accumulation.
+
 ---
 
-## 7. Troubleshooting
+## 9. Troubleshooting
 
 ### Check runner status
 
@@ -330,22 +418,29 @@ sudo systemctl status actions.runner.<OWNER>-<REPO>.<HOSTNAME>.service
 sudo journalctl -u actions.runner.<OWNER>-<REPO>.<HOSTNAME>.service -f
 ```
 
-### Check Caddy routing table
+### Check Traefik routing table
+
+If the dashboard is enabled, visit `https://traefik.pr.<your-domain>.com`.
+
+From the command line (requires a temporary curl container since the Traefik image has no shell):
 
 ```bash
-docker exec caddy cat /config/caddy/Caddyfile.autosave
+docker run --rm --network container:traefik curlimages/curl -s \
+  http://localhost:8080/api/rawdata | jq .
 ```
 
 ### Check if a PR container is reachable
 
 ```bash
-docker exec caddy wget -qO- http://rails-pr-42:3000/health 2>/dev/null
+# From the host, using the shared network
+docker run --rm --network traefik curlimages/curl -s \
+  http://rails-pr-42:3000/health
 ```
 
-### View Caddy logs
+### View Traefik logs
 
 ```bash
-docker logs caddy --tail 50
+docker logs traefik --tail 50
 ```
 
 ### View Rails container logs
@@ -359,21 +454,24 @@ docker logs rails-pr-42 --tail 50
 ```bash
 PR=42
 
-# If you have the app repo cloned locally:
+# Tear down by project name (does not require the compose file):
+docker compose -p pr-${PR} down -v
+
+# Or, if you have the app repo cloned locally:
 cd /path/to/your-app-repo
 docker compose -f docker-compose.pr.yml -p pr-${PR} down -v
 
-# Or use the fallback compose file from the infra repo:
-docker compose -f /opt/pr-preview/docker-compose.pr.yml -p pr-${PR} down -v
-
 # Clean up images
 docker images --format '{{.Repository}}:{{.Tag}}' | grep -E ":pr-${PR}-[a-f0-9]{40}$" | xargs -r docker rmi
+
+# Prune any leftover build cache
+docker builder prune -f
 ```
 
-### Force Caddy to reload
+### Restart Traefik
 
 ```bash
-docker kill --signal=SIGHUP caddy
+docker restart traefik
 ```
 
 ### Runner is offline in GitHub UI

@@ -1,42 +1,56 @@
-# Base infrastructure: Caddy (reverse proxy)
+# Base infrastructure: Traefik (reverse proxy)
 #
 # This compose file runs permanently on the VPS.
 # PR environments are launched separately by the CI/CD pipeline.
 #
 # Prerequisites:
-#   1. docker network create caddy --ipv6
-#   2. .env file with CLOUDFLARE_API_TOKEN
+#   1. docker network create traefik --ipv6
+#   2. .env file with CLOUDFLARE_API_TOKEN and TRAEFIK_ACME_EMAIL
 #   3. DNS: *.pr.mydomain.com → A record pointing to this VPS IP
 
 services:
-  caddy:
-    build:
-      context: .
-      dockerfile: Dockerfile.caddy
-    container_name: caddy
+  traefik:
+    image: traefik:v3.3
+    container_name: traefik
     ports:
       - "80:80"
       - "443:443/tcp"
       - "443:443/udp"
     environment:
-      - CADDY_INGRESS_NETWORKS=caddy
-      - CADDY_DOCKER_POLLING_INTERVAL=5s
-      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - CF_DNS_API_TOKEN=${CLOUDFLARE_API_TOKEN}
     networks:
-      - caddy
+      - traefik
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - traefik-certs:/letsencrypt
+    command:
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --entrypoints.web.http.redirections.entryPoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
     labels:
-      # Global ACME DNS challenge via Cloudflare — all sites share this
-      caddy.acme_dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+      # Wildcard certificate bootstrap
+      - "traefik.enable=true"
+      - "traefik.http.routers.wildcard-certs.rule=Host(`localhost`)"
+      - "traefik.http.routers.wildcard-certs.entrypoints=websecure"
+      - "traefik.http.routers.wildcard-certs.tls=true"
+      - "traefik.http.routers.wildcard-certs.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.wildcard-certs.tls.domains[0].main=pr.mydomain.com"
+      - "traefik.http.routers.wildcard-certs.tls.domains[0].sans=*.pr.mydomain.com"
+      - "traefik.http.routers.wildcard-certs.service=api@internal"
+      - "traefik.http.routers.wildcard-certs.priority=1"
     restart: unless-stopped
 
 networks:
-  caddy:
+  traefik:
     external: true
 
 volumes:
-  caddy_data: {}
-  caddy_config: {}
+  traefik-certs: {}

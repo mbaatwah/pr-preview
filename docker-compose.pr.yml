@@ -6,11 +6,19 @@
 # This file is kept as a reference. The CI/CD workflow prefers the app repo's
 # compose file and falls back to this template only if none is provided.
 #
+# ⚠️ LIMITATIONS OF THIS FALLBACK FILE:
+#   - No database service is defined. If your app requires Postgres, you
+#     MUST provide your own docker-compose.pr.yml.
+#   - The Rails service MUST be named `rails` and use container_name
+#     `rails-pr-${PR_NUMBER}` for the workflow's db:prepare step to work.
+#
 # Environment variables injected by the workflow:
 #   PR_NUMBER   — PR number (used for container names and hostnames)
 #   IMAGE_TAG   — image tag built by the workflow
 #   RAILS_IMAGE — default: rails-app
 #   VITE_IMAGE  — default: vite-app
+#
+# Replace <your-domain> with your actual domain before using.
 
 services:
   rails:
@@ -20,11 +28,13 @@ services:
       - RAILS_ENV=production
       - RAILS_LOG_TO_STDOUT=true
     networks:
-      - caddy
+      - traefik
     labels:
-      # Caddy routing: api-pr-42.pr.mydomain.com → this container
-      caddy: "api-pr-${PR_NUMBER}.pr.mydomain.com"
-      caddy.reverse_proxy: "{{upstreams 3000}}"
+      - "traefik.enable=true"
+      - "traefik.http.routers.rails-pr-${PR_NUMBER}.rule=Host(`api-pr-${PR_NUMBER}.pr.mydomain.com`)"
+      - "traefik.http.routers.rails-pr-${PR_NUMBER}.entrypoints=websecure"
+      - "traefik.http.routers.rails-pr-${PR_NUMBER}.tls.certresolver=letsencrypt"
+      - "traefik.http.services.rails-pr-${PR_NUMBER}.loadbalancer.server.port=3000"
     restart: unless-stopped
 
   vite:
@@ -33,13 +43,15 @@ services:
     environment:
       - VITE_API_URL=https://api-pr-${PR_NUMBER}.pr.mydomain.com
     networks:
-      - caddy
+      - traefik
     labels:
-      # Caddy routing: pr-42.pr.mydomain.com → this container
-      caddy: "pr-${PR_NUMBER}.pr.mydomain.com"
-      caddy.reverse_proxy: "{{upstreams 80}}"
+      - "traefik.enable=true"
+      - "traefik.http.routers.vite-pr-${PR_NUMBER}.rule=Host(`pr-${PR_NUMBER}.pr.mydomain.com`)"
+      - "traefik.http.routers.vite-pr-${PR_NUMBER}.entrypoints=websecure"
+      - "traefik.http.routers.vite-pr-${PR_NUMBER}.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vite-pr-${PR_NUMBER}.loadbalancer.server.port=80"
     restart: unless-stopped
 
 networks:
-  caddy:
+  traefik:
     external: true
