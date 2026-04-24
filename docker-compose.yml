@@ -35,17 +35,6 @@ services:
       - --certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare
       - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-    labels:
-      # Wildcard certificate bootstrap
-      - "traefik.enable=true"
-      - "traefik.http.routers.wildcard-certs.rule=Host(`localhost`)"
-      - "traefik.http.routers.wildcard-certs.entrypoints=websecure"
-      - "traefik.http.routers.wildcard-certs.tls=true"
-      - "traefik.http.routers.wildcard-certs.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.wildcard-certs.tls.domains[0].main=pr.mydomain.com"
-      - "traefik.http.routers.wildcard-certs.tls.domains[0].sans=*.pr.mydomain.com"
-      - "traefik.http.routers.wildcard-certs.service=api@internal"
-      - "traefik.http.routers.wildcard-certs.priority=1"
     restart: unless-stopped
 
 networks:

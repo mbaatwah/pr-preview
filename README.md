@@ -16,7 +16,7 @@ Every pull request gets an isolated ephemeral stack (Rails + Vite + Postgres) wi
 │                                                             │
 │  ┌─────────────────┐    ┌───────────────────────────────┐  │
 │  │ Traefik (proxy) │    │  GitHub Actions Runner Agent  │
-│  │ + wildcard TLS  │    │  (connects outbound to GH)    │
+│  │ + auto TLS      │    │  (connects outbound to GH)    │
 │  └────────┬────────┘    └───────────────┬───────────────┘  │
 │           │ traefik network             │ checkout + build │
 │  ┌────────┴─────────────────────────────┴───────────────┐  │
@@ -32,7 +32,7 @@ Every pull request gets an isolated ephemeral stack (Rails + Vite + Postgres) wi
 - **On PR open/update**: Builds Docker images, spins up containers, runs migrations, and exposes the preview at `https://pr-<number>.pr.<your-domain>.com`.
 - **On PR close**: Tears down containers, drops the per-PR database, and cleans up images.
 - **Zero shared state**: Each PR gets its own Postgres container and volume. No database collisions.
-- **Automatic TLS**: Traefik handles wildcard certificates via Cloudflare DNS challenge.
+- **Automatic TLS**: Traefik requests a certificate for each preview subdomain on demand via Cloudflare DNS challenge.
 
 ## What's in This Repo
 

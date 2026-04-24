@@ -22,7 +22,7 @@
 │                                                             │
 │  ┌─────────────────┐    ┌───────────────────────────────┐  │
 │  │ Traefik (proxy) │    │  GitHub Actions Runner Agent  │
-│  │ + wildcard TLS  │    │  (connects outbound to GH)    │
+│  │ + auto TLS      │    │  (connects outbound to GH)    │
 │  └────────┬────────┘    └───────────────┬───────────────┘  │
 │           │ traefik network             │ checkout + build │
 │  ┌────────┴─────────────────────────────┴───────────────┐  │
@@ -33,7 +33,7 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- **Traefik**: Single wildcard cert (`*.pr.<your-domain>.com`) via Cloudflare DNS challenge
+- **Traefik**: On-demand certificates for each preview subdomain via Cloudflare DNS challenge
 - **Self-hosted runner**: A GitHub Actions agent running on the VPS itself. Jobs
   are dispatched from GitHub, but Docker commands run natively on the machine.
 - **PR stacks**: Each PR is self-contained. The application repository defines its own
