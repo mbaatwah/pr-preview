@@ -33,7 +33,7 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- **Traefik**: On-demand certificates for each preview subdomain via Cloudflare DNS challenge
+- **Traefik**: On-demand certificates for each preview subdomain via Let's Encrypt
 - **Self-hosted runner**: A GitHub Actions agent running on the VPS itself. Jobs
   are dispatched from GitHub, but Docker commands run natively on the machine.
 - **PR stacks**: Each PR is self-contained. The application repository defines its own
@@ -68,7 +68,7 @@ git clone <your-infra-repo-url> .
 
 # Create the .env file from the template
 cp .env.example .env
-nano .env   # Fill in CLOUDFLARE_API_TOKEN and TRAEFIK_ACME_EMAIL
+nano .env   # Fill in TRAEFIK_ACME_EMAIL
 
 # Start the base infrastructure
 docker compose up -d
@@ -95,21 +95,16 @@ The dashboard will be available at `https://traefik.pr.<your-domain>.com` (or wh
 
 ---
 
-## 2. Cloudflare DNS Setup
+## 2. DNS Setup
 
-In your Cloudflare dashboard for `mydomain.com`:
+Add a wildcard A record so preview subdomains resolve to your VPS:
 
-1. **DNS Record**: Add an A record:
-   - Name: `*.pr`
-   - IPv4: `<your VPS IP>`
-   - Proxy: **OFF** (DNS-only, grey cloud) — required for ACME DNS challenge
+- **Type**: A
+- **Name**: `*.pr`
+- **Value**: `<your VPS IP>`
+- **TTL**: Auto
 
-2. **API Token**: Create a scoped API token at https://dash.cloudflare.com/profile/api-tokens
-   - Permissions:
-     - **Zone → Zone → Read**
-     - **Zone → DNS → Edit**
-   - Zone Resources: Include → Specific zone → `mydomain.com`
-   - Copy the token value — you'll need it for the `.env` file
+This lets `pr-42.pr.mydomain.com`, `api-pr-42.pr.mydomain.com`, etc. reach your server.
 
 ---
 

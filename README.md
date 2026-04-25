@@ -32,7 +32,7 @@ Every pull request gets an isolated ephemeral stack (Rails + Vite + Postgres) wi
 - **On PR open/update**: Builds Docker images, spins up containers, runs migrations, and exposes the preview at `https://pr-<number>.pr.<your-domain>.com`.
 - **On PR close**: Tears down containers, drops the per-PR database, and cleans up images.
 - **Zero shared state**: Each PR gets its own Postgres container and volume. No database collisions.
-- **Automatic TLS**: Traefik requests a certificate for each preview subdomain on demand via Cloudflare DNS challenge.
+- **Automatic TLS**: Traefik requests a certificate for each preview subdomain on demand via Let's Encrypt.
 
 ## What's in This Repo
 
@@ -43,19 +43,19 @@ Every pull request gets an isolated ephemeral stack (Rails + Vite + Postgres) wi
 | `docker-compose.pr.yml` | Reference compose template for per-PR stacks (app repo should provide its own) |
 | `.github/workflows/pr-open.yml` | Spin up a preview environment on the self-hosted runner |
 | `.github/workflows/pr-close.yml` | Tear down a preview environment on the self-hosted runner |
-| `SETUP.md` | Full setup guide: VPS bootstrap, runner installation, Cloudflare DNS, troubleshooting |
+| `SETUP.md` | Full setup guide: VPS bootstrap, runner installation, DNS, troubleshooting |
 
 ## Quick Start
 
 1. **Bootstrap the VPS**: Follow [SETUP.md](SETUP.md#1-vps-bootstrap--base-infrastructure) to install Docker, create the Traefik network, and start the base infrastructure.
 2. **Install the self-hosted runner**: Follow [SETUP.md](SETUP.md#3-install-self-hosted-github-actions-runner) to register the runner with your app repo.
-3. **Set up DNS**: Add a `*.pr` A record in Cloudflare pointing to your VPS IP.
+3. **Set up DNS**: Add a `*.pr` A record pointing to your VPS IP.
 4. **Add the compose file to your app repo**: Copy the example from [SETUP.md](SETUP.md#docker-composepryml) into your application repository.
 
 ## Requirements
 
 - Ubuntu VPS with Docker & Docker Compose
-- Cloudflare-managed domain
+- A domain with DNS A record support
 - GitHub repository with a self-hosted runner registered
 - Application repository must provide:
   - `docker-compose.pr.yml` (must define a `rails` service; see constraints in SETUP.md)
